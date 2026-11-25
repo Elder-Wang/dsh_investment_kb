@@ -1,0 +1,19 @@
+# Local inputs and private runtime data
+/参考对话.md
+/data/
+/originals/
+/indexes/
+.env
+.env.*
+!.env.example
+*.sqlite*
+*.db
+*.log
+
+# Development environments
+.DS_Store
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+dist/

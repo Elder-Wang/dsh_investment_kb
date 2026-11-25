@@ -42,6 +42,30 @@ class LocalLifecycle(unittest.TestCase):
         self.assertIn('光模块库存上升', self.call('read', old)['text'])
         self.assertEqual(note.read_text(encoding='utf-8'), '# 记录\n\n新判断：供给改善。')
 
+    def test_folder_lifecycle_with_confirmation(self):
+        self.call('init')
+        folder = (self.root / '跟踪资料').resolve()
+        folder.mkdir()
+        note = folder / '每周.md'
+        note.write_text('光模块周报', encoding='utf-8')
+        self.assertEqual(self.call('preview-folder', folder)['entries'][0]['status'], 'new')
+        self.assertEqual(self.call('sources'), [])
+        self.call('refresh-folder', folder)
+        cite = self.call('search', '光模块')[0]['citation']
+        self.assertEqual(self.call('sources'), [str(folder)])
+        self.call('remove-doc', folder, note.name, success=False)
+        self.assertEqual(self.call('read', cite)['text'], '光模块周报')
+        self.call('remove-doc', folder, note.name, '--confirm')
+        self.assertEqual(self.call('refresh-folder', folder)['entries'][0]['status'], 'ignored')
+        self.assertIn('引用不可用', self.call('read', cite, success=False))
+        self.call('restore-doc', folder, note.name, '--confirm')
+        self.call('refresh-folder', folder)
+        self.assertEqual(len(self.call('search', '光模块')), 1)
+        self.call('clear', '--confirm')
+        self.assertEqual(self.call('sources'), [])
+        self.assertEqual(self.call('search', '光模块'), [])
+        self.assertEqual(note.read_text(encoding='utf-8'), '光模块周报')
+
     def test_reject_nonempty_library_and_unknown_format(self):
         self.library.mkdir()
         marker = self.library / 'private.txt'

@@ -14,7 +14,17 @@ python3 kb_cli.py --library ~/投研试用库 read '把搜索结果的 citation 
 python3 -m unittest discover -v
 ```
 
-再次导入同一路径会检查更新；内容未变就跳过，改变后保存新版本。搜索默认只看各资料最新版本；旧 citation 在重新启动后仍能回读。原件以内容哈希去重，原始字节和检索段落目前一起保存在 SQLite 中。支持 UTF-8 / 带 BOM 的 UTF-16 文本、Markdown、HTML 和 DOCX，单文件上限 8 MiB。此命令行尚无目录登记、清理、星球连接、图形界面或模型调用。以下为完整首版的目标，不代表已全部交付。
+再次导入同一路径会检查更新；内容未变就跳过，改变后保存新版本。搜索默认只看各资料最新版本；旧 citation 在重新启动后仍能回读。原件以内容哈希去重，原始字节和检索段落目前一起保存在 SQLite 中。支持 UTF-8 / 带 BOM 的 UTF-16 文本、Markdown、HTML 和 DOCX，单文件上限 8 MiB。在 macOS 上还可以预览或刷新整个目录：
+
+```sh
+python3 kb_cli.py --library ~/投研试用库 preview-folder ~/Documents/研究笔记
+python3 kb_cli.py --library ~/投研试用库 refresh-folder ~/Documents/研究笔记
+python3 kb_cli.py --library ~/投研试用库 sources
+```
+
+预览不登记来源。刷新会登记来源，并逐项报告新增、变化、未变、忽略、不支持或失败。文件从原目录移走不影响已归档版本。命令 `remove-doc SOURCE KEY`、`remove-source SOURCE`、`clear` 分别删除资料、来源或清空库，都必须额外传 `--confirm` 才会执行。`SOURCE`、`KEY` 可直接取搜索结果中的 `source`、`key`。普通刷新不会复活已删资料；明确执行 `restore-doc SOURCE KEY --confirm` 后再刷新才会重新导入，旧引用不会指向新资料。这是应用层清理，不是对系统备份的安全擦除。
+
+星球连接和 DSH 界面仍待集成。以下为完整首版的目标，不代表已全部交付。
 
 ## 从空环境开始
 

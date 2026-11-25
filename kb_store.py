@@ -1,6 +1,7 @@
 """Local versioned knowledge store (Python 3.9+, SQLite, no model).
 
-Originals are immutable SQLite BLOBs keyed by SHA-256. Schema v2 requires
+Originals are immutable SQLite BLOBs keyed by SHA-256. Schema v3 (migrated atomically from v2) requires SQLite with
+source registrations and per-document refresh exclusions. Search requires
 SQLite with FTS5 trigram; opening fails explicitly if that is unavailable.
 Search uses case-folded trigram candidates for terms of 3+ characters,
 verifies every literal substring, and scans for short-only queries.
@@ -56,16 +57,25 @@ class Store:
         try:
             db.row_factory = sqlite3.Row
             db.execute('PRAGMA foreign_keys=ON')
-            if fresh:
-                with db:
-                    db.execute('BEGIN IMMEDIATE')
+            with db:
+                # Check the version *after* acquiring the writer lock: concurrent
+                # first opens of a v2 store must not apply the migration twice.
+                db.execute('BEGIN IMMEDIATE')
+                if fresh:
                     for stmt in _SCHEMA:
                         db.execute(stmt)
                     db.execute('PRAGMA application_id=%d' % _APP_ID)
                     db.execute('PRAGMA user_version=2')
-            if (db.execute('PRAGMA application_id').fetchone()[0] != _APP_ID
-                    or db.execute('PRAGMA user_version').fetchone()[0] != 2):
-                raise ValueError('Not a supported knowledge store (expected schema v2)')
+                version = db.execute('PRAGMA user_version').fetchone()[0]
+                if db.execute('PRAGMA application_id').fetchone()[0] != _APP_ID or version not in (2, 3):
+                    raise ValueError('Not a supported knowledge store (expected schema v2 or v3)')
+                if version == 2:
+                    db.execute('CREATE TABLE sources (source TEXT PRIMARY KEY NOT NULL)')
+                    db.execute('INSERT INTO sources SELECT DISTINCT source FROM versions')
+                    db.execute('CREATE TABLE ignored (source TEXT NOT NULL REFERENCES sources(source) '
+                               'ON DELETE CASCADE, key TEXT NOT NULL, PRIMARY KEY(source,key))')
+                    db.execute('CREATE INDEX version_digest ON versions(digest)')
+                    db.execute('PRAGMA user_version=3')
             db.execute('SELECT folded FROM passage_fts LIMIT 0')
             db.create_function('kb_fold', 1, str.casefold, deterministic=True)
             db.execute('SELECT v.id,v.source,v.key,o.digest,o.raw,p.pos,p.citation,'
@@ -79,19 +89,93 @@ class Store:
     def close(self):
         self._db.close()
 
-    def put(self, source: str, key: str, raw: bytes, parts: list) -> dict:
-        if not all(isinstance(s, str) and s.strip() for s in (source, key)):
+    @staticmethod
+    def _check_names(*names):
+        if not all(isinstance(s, str) and s.strip() for s in names):
             raise ValueError('source and key must be nonempty strings')
+
+    @staticmethod
+    def _digest(raw):
         if not isinstance(raw, bytes):
             raise TypeError('raw must be bytes')
-        digest = hashlib.sha256(raw).hexdigest()
+        return hashlib.sha256(raw).hexdigest()
+
+    def sources(self):
+        return [r[0] for r in self._db.execute('SELECT source FROM sources ORDER BY source')]
+
+    def register(self, source):
+        self._check_names(source)
+        with self._db:
+            self._db.execute('INSERT OR IGNORE INTO sources VALUES (?)', (source,))
+        return {'status': 'registered', 'source': source}
+
+    def _classify(self, source, key, digest):
+        # One consistent statement snapshot for preview; put repeats it under lock.
+        row = self._db.execute('''SELECT EXISTS(SELECT 1 FROM ignored WHERE source=?1 AND key=?2),
+            v.id,v.digest FROM (SELECT 1) LEFT JOIN versions v ON v.id=(SELECT max(id)
+            FROM versions WHERE source=?1 AND key=?2)''', (source,key)).fetchone()
+        status = ('ignored' if row[0] else 'new' if row[1] is None else
+                  'unchanged' if row[2] == digest else 'changed')
+        return status, row[1]
+
+    def classify(self, source, key, raw):
+        self._check_names(source, key)
+        return self._classify(source, key, self._digest(raw))[0]
+
+    def restore(self, source, key):
+        self._check_names(source, key)
+        with self._db:
+            changed = self._db.execute('DELETE FROM ignored WHERE source=? AND key=?', (source,key)).rowcount
+        return {'status': 'restored' if changed else 'unchanged', 'source': source, 'key': key}
+
+    def _purge(self, where, args):
+        # where is a fixed internal clause, never user input. Delete passages
+        # first so their delete trigger cleans matching FTS rows atomically.
+        db = self._db
+        db.execute('DELETE FROM passages WHERE version IN (SELECT id FROM versions' + where + ')', args)
+        n = db.execute('DELETE FROM versions' + where, args).rowcount
+        db.execute('DELETE FROM originals WHERE NOT EXISTS '
+                   '(SELECT 1 FROM versions WHERE versions.digest=originals.digest)')
+        return n
+
+    def remove_doc(self, source, key):
+        self._check_names(source, key)
+        with self._db:
+            self._db.execute('BEGIN IMMEDIATE')
+            n = self._purge(' WHERE source=? AND key=?', (source,key))
+            if n:
+                self._db.execute('INSERT OR IGNORE INTO ignored VALUES (?,?)', (source,key))
+        return {'status': 'removed' if n else 'unchanged', 'source': source, 'key': key, 'versions': n}
+
+    def remove_source(self, source):
+        self._check_names(source)
+        with self._db:
+            self._db.execute('BEGIN IMMEDIATE')
+            n = self._purge(' WHERE source=?', (source,))
+            removed = self._db.execute('DELETE FROM sources WHERE source=?', (source,)).rowcount
+        return {'status': 'removed' if removed else 'unchanged', 'source': source, 'versions': n}
+
+    def clear(self):
+        with self._db:
+            self._db.execute('BEGIN IMMEDIATE')
+            n = self._purge('', ())
+            self._db.execute('DELETE FROM sources')
+        return {'status': 'cleared', 'versions': n}
+
+    def put(self, source: str, key: str, raw: bytes, parts: list, *, require_registered=False) -> dict:
+        self._check_names(source, key)
+        digest = self._digest(raw)
         db = self._db
         with db:
             db.execute('BEGIN IMMEDIATE')
-            last = db.execute('SELECT id,digest FROM versions WHERE source=? AND key=? '
-                              'ORDER BY id DESC LIMIT 1', (source, key)).fetchone()
-            if last and last['digest'] == digest:
-                return {'status': 'unchanged', 'version': last['id']}
+            if require_registered and not db.execute('SELECT 1 FROM sources WHERE source=?', (source,)).fetchone():
+                raise ValueError('Source removed before refresh completed')
+            status, last = self._classify(source, key, digest)
+            if status == 'ignored':
+                return {'status': 'ignored'}
+            if status == 'unchanged':
+                return {'status': status, 'version': last}
+            db.execute('INSERT OR IGNORE INTO sources VALUES (?)', (source,))
             db.execute('INSERT OR IGNORE INTO originals VALUES (?,?)', (digest, raw))
             version = db.execute('INSERT INTO versions(source,key,digest) VALUES (?,?,?)',
                                  (source, key, digest)).lastrowid

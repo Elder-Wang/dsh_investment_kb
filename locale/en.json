@@ -1,0 +1,1 @@
+{"meta":{"title":"Research library","description":"Archive research notes, saved web pages and authorized ZSXQ posts locally. Search by source and follow citations to the archived version. Requires Python 3.9+ with SQLite FTS5 trigram. Import does not call a model; excerpts used in chat go to the current model."}}

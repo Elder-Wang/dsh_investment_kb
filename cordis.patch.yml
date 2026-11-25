@@ -1,0 +1,4 @@
+- insert:
+    - id: investment-research-kb
+      name: '@local/dsh-investment-kb'
+      config: {}

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, realpath, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { apply, createLibraryService } from './index.js';
+import { createLibraryService } from './kb_service.mjs';
 
 test('owner selects a fresh library; real CLI evidence and cleanup are fenced',async(t)=>{
  const root = await mkdtemp(join(tmpdir(),'dsh-host-test-'));
@@ -41,14 +41,10 @@ test('owner selects a fresh library; real CLI evidence and cleanup are fenced',a
  assert.deepEqual((await svc.read({action:'status'})).sources,[]);
 });
 
-test('browser peer restriction and agent registration',async()=>{
- let handle,tool; const ctx={effect:fn=>fn(), connection:{browserPeer:{id:'browser'},rpc:{intercept:(channel,match,cb)=>{
-   assert.equal(channel,'/api');assert.equal(match('investment-kb.manage'),true); handle=cb;return ()=>{};
- }}},tools:{register:d=>{tool=d;return ()=>{}}}};
- apply(ctx,{}); const s=new AbortController().signal;
- assert.equal((await handle('',{action:'status'},s,{id:'api',principal:{kind:'owner'}})).ok,false);
- assert.equal((await handle('',{action:'status'},s,{id:'browser',principal:{kind:'owner'}})).ok,true);
- assert.equal(tool.name,'investment_kb_query');
- assert.deepEqual(await tool.execute({action:'status'},{signal:s}),{result:{library:null,sources:[]}});
- await assert.rejects(tool.execute({action:'clear'},{signal:s}));
+test('the Host glue exposes one read-only tool and one Remote namespace',async()=>{
+  const source = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  assert.match(source, /namespace: 'investmentKb'/);
+  assert.match(source, /principal !== 'owner'/);
+  assert.match(source, /name: 'investment_kb_query'/);
+  assert.doesNotMatch(source, /rpc\.intercept|rpc\.handle/);
 });

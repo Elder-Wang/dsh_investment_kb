@@ -44,7 +44,7 @@ test('owner selects a fresh library; real CLI evidence and cleanup are fenced',a
 test('the Host glue exposes one read-only tool and one Remote namespace',async()=>{
   const source = await readFile(new URL('./index.js', import.meta.url), 'utf8');
   assert.match(source, /namespace: 'investmentKb'/);
-  assert.match(source, /principal !== 'owner'/);
+  assert.match(source, /kind !== 'owner'/);
   assert.match(source, /name: 'investment_kb_query'/);
   assert.doesNotMatch(source, /rpc\.intercept|rpc\.handle/);
 });

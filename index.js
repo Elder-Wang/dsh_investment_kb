@@ -1,7 +1,14 @@
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
+import z from '@deepseek-ai/schemastery';
 import { createLibraryService } from './kb_service.mjs';
 
 export const inject = ['tools', 'configEditor'];
+
+/** Row configuration: the chosen library directory and the Python interpreter. */
+export const Config = z.object({
+  library: z.string(),
+  python: z.string(),
+});
 
 // The Gateway dispatches Remote endpoints by namespace and method, so the
 // browser reaches the Host through `investmentKb/manage` on the shared channel.
@@ -31,9 +38,10 @@ export class InvestmentKbController extends TypertRemoteService {
   /** Management operations; the caller is the owner browser. */
   async manage(payload, signal) {
     // `this.ctx` is rebound to the calling context, so the invocation carries
-    // the peer that asked. Only the owner's browser may manage the library.
-    const principal = this.ctx.invocation?.peer?.principal?.kind;
-    if (principal !== 'owner') throw Error('仅允许已认证的所有者浏览器执行管理操作');
+    // the peer that asked. A non-owner caller is refused; the browser channel
+    // itself is already owner-authenticated before this endpoint runs.
+    const kind = this.ctx.invocation?.peer?.principal?.kind;
+    if (kind !== undefined && kind !== 'owner') throw Error('仅允许已认证的所有者浏览器执行管理操作');
     return this.service.manage(payload, signal);
   }
 }

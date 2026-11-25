@@ -13,7 +13,8 @@
   "files": ["index.js", "client.js", "kb_service.mjs", "bridge.mjs", "picker.mjs", "kb_cli.py", "kb_store.py", "kb_formats.py", "kb_folders.py", "kb_planet.py", "icon.svg", "locale/*.json", "cordis.patch.yml", "README.md"],
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh-typert-protocol": "^0.2.2-rc.5"
+    "@deepseek-ai/dsh-typert-protocol": "^0.2.2-rc.5",
+    "@deepseek-ai/schemastery": "^3.18.4"
   },
   "dsh": {
     "bundle": {"patch": "./cordis.patch.yml"},

@@ -1,13 +1,14 @@
 """Local versioned knowledge store (Python 3.9+, SQLite, no model).
 
-Originals are immutable SQLite BLOBs keyed by SHA-256. Schema v3 (migrated atomically from v2) requires SQLite with
-source registrations and per-document refresh exclusions. Search requires
+Originals are immutable SQLite BLOBs keyed by SHA-256. Schema v4 migrates v2/v3 atomically and tracks
+source registrations, refresh exclusions, source cursors, and version metadata. Search requires
 SQLite with FTS5 trigram; opening fails explicitly if that is unavailable.
 Search uses case-folded trigram candidates for terms of 3+ characters,
 verifies every literal substring, and scans for short-only queries.
 Citations address passages of specific versions, including superseded ones.
 """
 import hashlib
+import json
 from pathlib import Path
 import sqlite3
 from uuid import uuid4
@@ -67,8 +68,8 @@ class Store:
                     db.execute('PRAGMA application_id=%d' % _APP_ID)
                     db.execute('PRAGMA user_version=2')
                 version = db.execute('PRAGMA user_version').fetchone()[0]
-                if db.execute('PRAGMA application_id').fetchone()[0] != _APP_ID or version not in (2, 3):
-                    raise ValueError('Not a supported knowledge store (expected schema v2 or v3)')
+                if db.execute('PRAGMA application_id').fetchone()[0] != _APP_ID or version not in (2, 3, 4):
+                    raise ValueError('Not a supported knowledge store (expected schema v2, v3 or v4)')
                 if version == 2:
                     db.execute('CREATE TABLE sources (source TEXT PRIMARY KEY NOT NULL)')
                     db.execute('INSERT INTO sources SELECT DISTINCT source FROM versions')
@@ -76,6 +77,12 @@ class Store:
                                'ON DELETE CASCADE, key TEXT NOT NULL, PRIMARY KEY(source,key))')
                     db.execute('CREATE INDEX version_digest ON versions(digest)')
                     db.execute('PRAGMA user_version=3')
+                if version <= 3:
+                    db.execute('CREATE TABLE cursors (source TEXT PRIMARY KEY NOT NULL REFERENCES '
+                               'sources(source) ON DELETE CASCADE, cursor TEXT NOT NULL)')
+                    db.execute('CREATE TABLE version_metadata (version INTEGER PRIMARY KEY REFERENCES '
+                               'versions(id) ON DELETE CASCADE, payload TEXT NOT NULL)')
+                    db.execute('PRAGMA user_version=4')
             db.execute('SELECT folded FROM passage_fts LIMIT 0')
             db.create_function('kb_fold', 1, str.casefold, deterministic=True)
             db.execute('SELECT v.id,v.source,v.key,o.digest,o.raw,p.pos,p.citation,'
@@ -108,6 +115,22 @@ class Store:
         with self._db:
             self._db.execute('INSERT OR IGNORE INTO sources VALUES (?)', (source,))
         return {'status': 'registered', 'source': source}
+
+    def get_cursor(self, source):
+        self._check_names(source)
+        row = self._db.execute('SELECT cursor FROM cursors WHERE source=?', (source,)).fetchone()
+        return None if row is None else row[0]
+
+    def save_cursor(self, source, cursor):
+        self._check_names(source)
+        if not isinstance(cursor, str):
+            raise ValueError('cursor must be a string')
+        with self._db:
+            changed = self._db.execute('INSERT INTO cursors(source,cursor) SELECT source,? '
+                'FROM sources WHERE source=? ON CONFLICT(source) DO UPDATE SET cursor=excluded.cursor',
+                (cursor, source)).rowcount
+            if not changed:
+                raise ValueError('Source removed before saving cursor')
 
     def _classify(self, source, key, digest):
         # One consistent statement snapshot for preview; put repeats it under lock.
@@ -162,7 +185,8 @@ class Store:
             self._db.execute('DELETE FROM sources')
         return {'status': 'cleared', 'versions': n}
 
-    def put(self, source: str, key: str, raw: bytes, parts: list, *, require_registered=False) -> dict:
+    def put(self, source: str, key: str, raw: bytes, parts: list, *, require_registered=False,
+            metadata=None) -> dict:
         self._check_names(source, key)
         digest = self._digest(raw)
         db = self._db
@@ -179,6 +203,11 @@ class Store:
             db.execute('INSERT OR IGNORE INTO originals VALUES (?,?)', (digest, raw))
             version = db.execute('INSERT INTO versions(source,key,digest) VALUES (?,?,?)',
                                  (source, key, digest)).lastrowid
+            if metadata is not None:
+                if not isinstance(metadata, dict):
+                    raise ValueError('metadata must be an object')
+                payload = json.dumps(metadata, ensure_ascii=False, allow_nan=False)
+                db.execute('INSERT INTO version_metadata VALUES (?,?)', (version, payload))
             for pos, (locator, text) in enumerate(parts):
                 if not isinstance(locator, str) or not isinstance(text, str):
                     raise TypeError('locator and text must be strings')
@@ -189,7 +218,13 @@ class Store:
                            (passage, text.casefold().replace('\x00', ' ')))
             return {'status': 'changed' if last else 'new', 'version': version}
 
-    def search(self, query, limit=20):
+    @staticmethod
+    def _hit(row):
+        hit = dict(row)
+        hit['metadata'] = json.loads(hit['metadata']) if hit['metadata'] else {}
+        return hit
+
+    def search(self, query, limit=20, source=None):
         if not isinstance(limit, int) or limit < 0:
             raise ValueError('limit must be a nonnegative integer')
         terms = list(dict.fromkeys(query.casefold().split()))
@@ -198,21 +233,45 @@ class Store:
         indexed = [t for t in terms if len(t) >= 3 and '\x00' not in t]
         clauses = ['instr(kb_fold(p.text), ?) > 0' for _ in terms]
         params = list(terms)
+        if source is not None:
+            self._check_names(source)
+            clauses.append('v.source=?')
+            params.append(source)
         if indexed:
             # Every phrase is literal, including embedded quotes and FTS operators.
             phrases = ['"' + t.replace('"', '""') + '"' for t in indexed]
             clauses.insert(0, 'p.id IN (SELECT rowid FROM passage_fts WHERE passage_fts MATCH ?)')
             params.insert(0, ' AND '.join(phrases))
-        rows = self._db.execute('''SELECT p.citation,p.text,v.source,v.key,p.locator
-            FROM passages p JOIN versions v ON v.id=p.version
+        rows = self._db.execute('''SELECT p.citation,p.text,v.source,v.key,p.locator,m.payload AS metadata
+            FROM passages p JOIN versions v ON v.id=p.version LEFT JOIN version_metadata m ON m.version=v.id
             WHERE v.id=(SELECT max(w.id) FROM versions w WHERE w.source=v.source AND w.key=v.key)
             AND ''' + ' AND '.join(clauses) + ' ORDER BY v.id DESC,p.pos LIMIT ?', (*params, limit))
-        return [dict(row) for row in rows]
+        return [self._hit(row) for row in rows]
 
     def read(self, citation):
-        row = self._db.execute('''SELECT p.citation,p.text,v.source,v.key,p.locator
-            FROM passages p JOIN versions v ON v.id=p.version WHERE p.citation=?''',
+        row = self._db.execute('''SELECT p.citation,p.text,v.source,v.key,p.locator,m.payload AS metadata
+            FROM passages p JOIN versions v ON v.id=p.version LEFT JOIN version_metadata m ON m.version=v.id WHERE p.citation=?''',
                                (citation,)).fetchone()
         if row is None:
             raise KeyError(citation)
-        return dict(row)
+        return self._hit(row)
+
+    def read_document(self, citation):
+        """Resolve a passage citation to its immutable version, in passage order."""
+        sql = '''SELECT v.id AS version,v.key,v.source,m.payload AS metadata,
+                 p.citation,p.locator,p.text FROM passages anchor
+                 JOIN versions v ON v.id=anchor.version
+                 JOIN passages p ON p.version=v.id
+                 LEFT JOIN version_metadata m ON m.version=v.id
+                 WHERE anchor.citation=? ORDER BY p.pos'''
+        rows = self._db.execute(sql, (citation,))
+        doc = None
+        for row in rows:
+            if doc is None:
+                doc = {k: row[k] for k in ('version', 'key', 'source')}
+                doc['metadata'] = json.loads(row['metadata']) if row['metadata'] else {}
+                doc['passages'] = []
+            doc['passages'].append({k: row[k] for k in ('citation', 'locator', 'text')})
+        if doc is None:
+            raise KeyError(citation)
+        return doc

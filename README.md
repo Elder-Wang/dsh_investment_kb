@@ -24,7 +24,18 @@ python3 kb_cli.py --library ~/投研试用库 sources
 
 预览不登记来源。刷新会登记来源，并逐项报告新增、变化、未变、忽略、不支持或失败。文件从原目录移走不影响已归档版本。命令 `remove-doc SOURCE KEY`、`remove-source SOURCE`、`clear` 分别删除资料、来源或清空库，都必须额外传 `--confirm` 才会执行。`SOURCE`、`KEY` 可直接取搜索结果中的 `source`、`key`。普通刷新不会复活已删资料；明确执行 `restore-doc SOURCE KEY --confirm` 后再刷新才会重新导入，旧引用不会指向新资料。这是应用层清理，不是对系统备份的安全擦除。
 
-星球连接和 DSH 界面仍待集成。以下为完整首版的目标，不代表已全部交付。
+### 手动同步已获授权的知识星球
+
+在自己的本机终端运行，下列 `123456` 替换为数字星球 ID。首次同步会提示输入 token（不回显），不读取旧项目配置，不应将 token 放入命令参数或聊天。非交互调用可由启动进程提供 `ZSXQ_ACCESS_TOKEN`。只在显式执行同步时请求星球，不在查询时联网。
+
+```sh
+python3 kb_cli.py --library ~/投研试用库 sync-planet 123456 --max-pages 1
+python3 kb_cli.py --library ~/投研试用库 planet-status 123456
+python3 kb_cli.py --library ~/投研试用库 search '光模块' --source 'zsxq:123456'
+python3 kb_cli.py --library ~/投研试用库 document '上一步返回的 citation'
+```
+
+保留信息流返回的帖子／问答正文和必要元数据。内嵌文章目前只归档返回的标题，不代表已采集文章全文；不下载附件，不调用模型结构化；状态里的已见最早／最晚日期不是“中间每一天均已采全”的证明。`document` 返回引用对应版本的有序段落，即使之后更新了资料也不会切换版本。采集器使用离线模拟响应验证，真实账号联网效果和 DSH 界面仍待验收。以下为完整首版目标，不代表已全部交付。
 
 ## 从空环境开始
 

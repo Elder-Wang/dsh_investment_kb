@@ -21,7 +21,7 @@ class LocalLifecycle(unittest.TestCase):
         proc = subprocess.run([sys.executable, '-E', '-s', str(CLI), '--library',
                                str(self.library), *args], cwd=self.root,
                               env={'PATH': os.defpath, 'HOME': str(self.root)},
-                              capture_output=True, text=True, timeout=10)
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
         if success:
             self.assertEqual(proc.returncode, 0, proc.stderr)
             return json.loads(proc.stdout)
@@ -40,7 +40,20 @@ class LocalLifecycle(unittest.TestCase):
         self.assertEqual(self.call('search', '光模块'), [])
         self.assertIn('供给改善', self.call('search', '供给改善')[0]['text'])
         self.assertIn('光模块库存上升', self.call('read', old)['text'])
+        document = self.call('document', old)
+        self.assertEqual([p['text'] for p in document['passages']], ['记录', '旧判断：光模块库存上升。'])
+        self.assertEqual(self.call('search', '供给改善', '--source', 'zsxq:123'), [])
+        self.assertEqual(len(self.call('search', '供给改善', '--source', document['source'])), 1)
         self.assertEqual(note.read_text(encoding='utf-8'), '# 记录\n\n新判断：供给改善。')
+
+    def test_planet_sync_without_credentials_stays_local(self):
+        self.call('init')
+        error = self.call('sync-planet', '123', success=False)
+        self.assertIn('ZSXQ_ACCESS_TOKEN', error)
+        self.assertEqual(self.call('sources'), [])
+        report = self.call('planet-status', '123')
+        self.assertEqual(report['source'], 'zsxq:123')
+        self.assertEqual(self.call('sources'), [])
 
     def test_folder_lifecycle_with_confirmation(self):
         self.call('init')

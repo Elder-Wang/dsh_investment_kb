@@ -1,6 +1,8 @@
 """Local JSON CLI for the investment knowledge base. Python 3.9+."""
 import argparse
+import getpass
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -20,7 +22,13 @@ def parser():
     query = sub.add_parser('search', help='按关键词检索当前版本')
     query.add_argument('query')
     query.add_argument('--limit', type=int, default=20, choices=range(1, 101), metavar='1..100')
+    query.add_argument('--source', help='仅查指定来源，使用 sources 返回的精确值')
     sub.add_parser('read', help='回读指定版本的引文').add_argument('citation')
+    sub.add_parser('document', help='按引用回读相应版本的全部段落').add_argument('citation')
+    sync = sub.add_parser('sync-planet', help='从用户有权访问的知识星球手动同步')
+    sync.add_argument('group_id', help='数字星球 ID')
+    sub.add_parser('planet-status', help='离线查看星球的已有覆盖范围').add_argument('group_id')
+    sync.add_argument('--max-pages', type=int, default=1, choices=range(1, 21), metavar='1..20')
     for cmd in ('preview-folder', 'refresh-folder'):
         sub.add_parser(cmd).add_argument('path', type=Path)
     sub.add_parser('sources', help='列出已登记的来源')
@@ -40,6 +48,17 @@ def run(args):
     try:
         if args.action == 'init':
             return {'library': str(root), 'ready': True}
+        if args.action == 'planet-status':
+            from kb_planet import planet_status
+            return planet_status(store, args.group_id)
+        if args.action == 'sync-planet':
+            from kb_planet import sync
+            token = os.environ.get('ZSXQ_ACCESS_TOKEN')
+            if not token and sys.stdin.isatty():
+                token = getpass.getpass('知识星球 access token（不回显）：')
+            if not token:
+                raise ValueError('请在本机交互终端输入凭据，或通过环境变量 ZSXQ_ACCESS_TOKEN 提供；请勿粘贴到对话中。')
+            return sync(store, args.group_id, token, max_pages=args.max_pages)
         if args.action == 'sources':
             return store.sources()
         if args.action in ('preview-folder', 'refresh-folder'):
@@ -73,9 +92,9 @@ def run(args):
         if args.action == 'search':
             if not args.query.strip():
                 raise ValueError('请输入关键词')
-            return store.search(args.query, limit=args.limit)
+            return store.search(args.query, limit=args.limit, source=args.source)
         try:
-            return store.read(args.citation)
+            return store.read_document(args.citation) if args.action == 'document' else store.read(args.citation)
         except KeyError:
             raise ValueError('引用不可用：资料可能已清理，或该引用不属于当前库') from None
     finally:
@@ -84,7 +103,11 @@ def run(args):
 
 def main():
     try:
-        result = run(parser().parse_args())
+        args = parser().parse_args()
+        result = run(args)
+        if args.action == 'sync-planet' and result['status'] != 'ok':
+            print(json.dumps({'error': '同步未完成：' + result['status'], 'report': result}, ensure_ascii=False), file=sys.stderr)
+            return 1
     except (ValueError, OSError, sqlite3.Error, LookupError, RuntimeError) as exc:
         print(json.dumps({'error': str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1

@@ -69,7 +69,7 @@ class CleanupTests(unittest.TestCase):
         citation = self.s.search('旧版材料')[0]['citation']
         db = self.s._db
         with db:
-            for stmt in ('DROP TABLE ignored', 'DROP TABLE sources', 'DROP INDEX version_digest', 'PRAGMA user_version=2'):
+            for stmt in ('DROP TABLE version_metadata', 'DROP TABLE cursors', 'DROP TABLE ignored', 'DROP TABLE sources', 'DROP INDEX version_digest', 'PRAGMA user_version=2'):
                 db.execute(stmt)
         barrier = threading.Barrier(2)
 
@@ -91,7 +91,7 @@ class CleanupTests(unittest.TestCase):
             list(pool.map(worker, [0, 1]))
         self.assertEqual(self.s.classify('single', 'key', b'changed'), 'ignored')
         self.assertEqual(self.counts()['passage_fts'], 0)
-        self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+        self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
 
 
 if __name__ == '__main__':

@@ -1,6 +1,20 @@
 # DSH 投研资料库 · 首版设计
 
-状态：需求基线，尚未实现或验证。首要平台为 macOS；尽量避免平台专用路径与命令，不为兼容 Windows 增加首版范围，未经实测不声明支持。
+状态：已有可独立运行的本地 Python 核心；不是已安装的 DSH 插件。首要平台为 macOS；尽量避免平台专用路径与命令，未经实测不声明支持 Windows。
+
+### 从源码试跑本地核心
+
+在本项目目录运行以下命令。这个里程碑只用 Python 3.9+ 标准库，其 SQLite 需支持 FTS5 trigram，不需要安装第三方包。开发机验证环境：macOS 26.6.2 arm64、Python 3.9.6、SQLite 3.51.0；这不替代另一台干净机器的安装验收。下面的建库路径请换成独立空目录，笔记路径换成自己的文件：
+
+```sh
+python3 kb_cli.py --library ~/投研试用库 init
+python3 kb_cli.py --library ~/投研试用库 import-file ~/Documents/跟踪笔记.md
+python3 kb_cli.py --library ~/投研试用库 search '光模块'
+python3 kb_cli.py --library ~/投研试用库 read '把搜索结果的 citation 粘贴在这里'
+python3 -m unittest discover -v
+```
+
+再次导入同一路径会检查更新；内容未变就跳过，改变后保存新版本。搜索默认只看各资料最新版本；旧 citation 在重新启动后仍能回读。原件以内容哈希去重，原始字节和检索段落目前一起保存在 SQLite 中。支持 UTF-8 / 带 BOM 的 UTF-16 文本、Markdown、HTML 和 DOCX，单文件上限 8 MiB。此命令行尚无目录登记、清理、星球连接、图形界面或模型调用。以下为完整首版的目标，不代表已全部交付。
 
 ## 从空环境开始
 
